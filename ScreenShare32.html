@@ -28,8 +28,9 @@
 
   async function captureAndSend() {
     canvas = document.getElementById('screenCanvas');
-    ctx = canvas.getContext('2d');
-
+    //ctx = canvas.getContext('2d');
+    ctx = canvas.getContext('2d', { willReadFrequently: true });
+	  
 	// Establish a WebSocket connection to the WLED server
 	const host = document.querySelector("#host").value;
 	window.localStorage.setItem("host", host);
