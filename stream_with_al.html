@@ -1,1 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Screen Capture</title>
+  <style>
+    canvas {
+      border: 1px solid #000;
+    }
+  </style>
+</head>
+<body onload="loadHost()">
+  <input id="host" type="host" placeholder="wled-host"><button onclick="captureAndSend()">Start</button>
+  <canvas id="screenCanvas" width="320" height="320"></canvas>
+<script>
+  let captureStreamTrack = 0;
+  let socket = 0;
+  let canvas = 0;
+  let ctx = 0;
 
+  function loadHost() {
+    document.querySelector("#host").value = localStorage.getItem("host") || "";
+  }
+
+  async function captureAndSend() {
+    canvas = document.getElementById('screenCanvas');
+    ctx = canvas.getContext('2d');
+
+    const host = document.querySelector("#host").value;
+    window.localStorage.setItem("host", host);
+    socket = new WebSocket("ws://" + host + "/ws");
+
+    const captureStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    captureStreamTrack = captureStream.getVideoTracks()[0];
+    sendFrame();
+  }
+
+  function toHex2(i) {
+    const h = i.toString(16);
+    return h.length === 1 ? "0" + h : h;
+  }
+
+  async function sendFrame() {
+    try {
+      const imageCapture = new ImageCapture(captureStreamTrack);
+      const bitmap = await imageCapture.grabFrame();
+
+      // Draw the captured image onto the canvas
+      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+      const json = { seg: { i: [] } };
+      const pix = ctx.getImageData(0, 0, 32, 32).data;
+
+      // Adjusted logic for 32x32 matrix
+      for (let y = 0; y < 32; y++) {
+        for (let x = 0; x < 32; x++) {
+          const r = pix[(y * 32 + x) * 4 + 0]; // Correct mapping for red
+          const g = pix[(y * 32 + x) * 4 + 1]; // Correct mapping for green
+          const b = pix[(y * 32 + x) * 4 + 2]; // Correct mapping for blue
+          const rgbHex = toHex2(r) + toHex2(g) + toHex2(b); // Convert RGB to hex
+          json.seg.i.push(x + y * 32); // Adjusted to match 32x32 resolution
+          json.seg.i.push(rgbHex);
+        }
+      }
+
+      if (socket.readyState === socket.OPEN) {
+        socket.send(JSON.stringify(json));
+      } else if (socket.readyState === socket.CLOSED) {
+        const host = document.querySelector("#host").value;
+        socket = new WebSocket("ws://" + host + "/ws");
+      }
+
+      window.setTimeout(sendFrame, 20); // Schedule next frame
+    } catch (e) {
+      console.error(e);
+    }
+  }
+</script>
+</body>
+</html>
