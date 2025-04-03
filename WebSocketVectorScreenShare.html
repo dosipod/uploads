@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<script>
+		let ws = null;
+		let ctx0 = null;
+		let canvas0 = null;
+		let ctx1 = null;
+		let canvas1 = null;
+		let ctx2 = null;
+		let canvas2 = null;
+		let ctx3 = null;
+		let canvas3 = null;
+		let video = null;
+		
+		let frameCounter = 0;
+		let deltaError = null;
+		let deltaPixels = null;
+		let threshold = 128;
+		let fps = 10;
+		let minPoints = 3;
+		let ack = true;
+
+		function getSegments(magnitude, xres, yres, step, threshold)
+		{
+			let segments = [];
+			for(let y = 0; y < yres; y += step)
+				for(let x = 0; x < xres; x += step)
+				{
+					let maxMag = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
+					for(let i = 0; i < step; i++)
+					{
+						const x1 = Math.min(x + step, xres - 1); 
+						const y1 = Math.min(y + step, yres - 1);
+						if(maxMag[0][0] < magnitude[xres * y + x + i])
+							maxMag[0] = [magnitude[xres * y + x + i], x + i, y];
+						if(maxMag[1][0] < magnitude[xres * y1 + x + i])
+							maxMag[1] = [magnitude[xres * y1 + x + i], x + i, y1];
+						if(maxMag[2][0] < magnitude[xres * y + x + i])
+							maxMag[2] = [magnitude[xres * y + x + i], x, y + i];
+						if(maxMag[3][0] < magnitude[xres * (y + i) + x1])
+							maxMag[3] = [magnitude[xres * (y + i) + x1], x1, y + i];
+					}
+					let seg = [[0, 0, 0], [0, 0, 0]];
+					for(let i = 0; i < 4; i++)
+						if(seg[0][0] < maxMag[i][0])
+							seg[0] = maxMag[i];
+					for(let i = 0; i < 4; i++)
+						if(seg[0][0] != maxMag[i][0] && seg[1][0] < maxMag[i][0])
+							seg[1] = maxMag[i];
+					if(seg[0][0] > threshold && seg[1][0] > threshold)
+					segments.push(seg);
+				}
+			return removeMagnitude(segments);
+		}
+
+		function filterStrips(strips, minPoints)
+		{
+			let s = [];
+			for(let i = 0; i < strips.length; i++)
+			{
+				if(strips[i].length >= minPoints)
+					s.push(strips[i]);
+			}
+			return s;
+		}
+
+		function removeMagnitude(segments)
+		{
+			let segs = [];
+			for(let i = 0; i < segments.length; i++)
+			{
+				let seg = segments[i];
+				segs.push([[seg[0][1],seg[0][2]],[seg[1][1],seg[1][2]]]);
+			} 
+			return segs;
+		}
+
+		function concatenateLineSegments(segments) 
+		{
+			const strips = [];
+
+			while (segments.length > 0) {
+				// Start a new strip with the first segment
+				let strip = segments.pop();
+				let addedToStrip = true;
+
+				// Try to extend the strip by checking for shared endpoints
+				while (addedToStrip) {
+					addedToStrip = false;
+
+					for (let i = 0; i < segments.length; i++) {
+						const [[x1, y1], [x2, y2]] = segments[i];
+
+						if (isEndpointShared(strip[0], [x1, y1])) {
+							strip.unshift([x2, y2]);
+							segments.splice(i, 1);
+							addedToStrip = true;
+							break;
+						} else if (isEndpointShared(strip[0], [x2, y2])) {
+							strip.unshift([x1, y1]);
+							segments.splice(i, 1);
+							addedToStrip = true;
+							break;
+						} else if (isEndpointShared(strip[strip.length - 1], [x1, y1])) {
+							strip.push([x2, y2]);
+							segments.splice(i, 1);
+							addedToStrip = true;
+							break;
+						} else if (isEndpointShared(strip[strip.length - 1], [x2, y2])) {
+							strip.push([x1, y1]);
+							segments.splice(i, 1);
+							addedToStrip = true;
+							break;
+						}
+					}
+				}
+
+				strips.push(strip);
+			}
+			return strips;
+		}
+
+		function isEndpointShared(p1, p2) {
+			return p1[0] === p2[0] && p1[1] === p2[1];
+		}
+
+		function sortStripsByProximity(strips) 
+		{
+			if(!strips || !strips.length)
+				return [];
+			const sortedStrips = [strips.shift()]; // Start with the first strip
+
+			while (strips.length > 0) {
+				const lastPoint = sortedStrips[sortedStrips.length - 1].at(-1); // Endpoint of the last strip
+				let closestIndex = -1;
+				let minDistance = Infinity;
+
+				// Find the closest strip based on the distance from the last endpoint
+				for (let i = 0; i < strips.length; i++) {
+					const startPoint = strips[i][0];
+					const distance = calculateDistance(lastPoint, startPoint);
+
+					if (distance < minDistance) {
+						minDistance = distance;
+						closestIndex = i;
+					}
+				}
+
+				// Add the closest strip to the sorted array
+				sortedStrips.push(strips.splice(closestIndex, 1)[0]);
+			}
+
+			return sortedStrips;
+		}
+
+		function calculateDistance([x1, y1], [x2, y2]) {
+			return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+		}
+
+		function showSegments(segments, xres, yres)
+		{
+			ctx3.clearRect(0, 0, xres, yres);
+			ctx3.strokeStyle = `rgb(${0} ${0} ${0})`;
+			ctx3.beginPath();
+            segments.forEach(segment => {
+                const [[x0, y0], [x1, y1]] = segment;
+                ctx3.moveTo(x0, y0);
+                ctx3.lineTo(x1, y1);
+            });
+            ctx3.stroke();
+		}
+
+		function showStrips(strips, xres, yres)
+		{
+			if (!strips || strips.length === 0) 
+				return;
+			ctx3.clearRect(0, 0, xres, yres);
+			ctx3.strokeStyle = `rgb(${0} ${0} ${0})`;
+			ctx3.beginPath();
+            strips.forEach(strip => {
+				if(!strip) return;
+				ctx3.moveTo(strip[0][0], strip[0][1]);
+                for(let i = 1; i < strip.length; i++)                
+                	ctx3.lineTo(strip[i][0], strip[i][1]);
+            });
+            ctx3.stroke();
+		}
+
+		function getGradient(pixels, xres, yres, components = 3)
+		{
+			const kernelOffset = [
+				[-1, -1], [0, -1], [1, -1],
+				[-1,  0], [0,  0], [1,  0],
+				[-1,  1], [0,  1], [1,  1]];
+			const kernelx = [
+				-1, 0, 1,
+				-2, 0, 2,
+				-1, 0, 1];
+			const kernely = [
+				-1,-2,-1,
+				 0, 0, 0,
+				 1, 2, 1];
+			const stride = 2 * components;
+			let gradient = new Int32Array(xres * yres * stride);
+			for(let y = 0; y < yres; y++)
+				for(let x = 0; x < xres; x++)
+					for(let c = 0; c < components; c++)
+					{
+						let gx = 0;
+						let gy = 0;
+						for(let i = 0; i < kernelOffset.length; i++)
+						{
+							let xi = x + kernelOffset[i][0];						
+							let yi = y + kernelOffset[i][1];
+							//clamp to border pixels
+							if(xi < 0) xi = 0;
+							if(xi >= xres) xi = xres - 1;
+							if(yi < 0) yi = 0;
+							if(yi >= yres) yi = yres - 1;
+							gx += pixels[(yi * xres + xi) * 4 + c] * kernelx[i];
+							gy += pixels[(yi * xres + xi) * 4 + c] * kernely[i];
+						}
+						gradient[(y * xres + x) * stride + c * 2 + 0] = gx;
+						gradient[(y * xres + x) * stride + c * 2 + 1] = gy;
+					}
+			return gradient;
+		}
+
+		function showGradient(gradient, xres, yres, components = 3)
+		{
+			var imgData = ctx2.getImageData(0, 0, xres, yres);
+			var pixels = imgData.data;
+			const stride = 2 * components;
+			let i = 0;
+			for(let y = 0; y < yres; y++)
+				for(let x = 0; x < xres; x++)
+				{
+					pixels[i * 4 + 0] = gradient[i * stride + 0];
+					pixels[i * 4 + 1] = 0;
+					pixels[i * 4 + 2] = gradient[i * stride + 1];
+					pixels[i * 4 + 3] = 255;
+					i++;
+				}
+					
+			ctx2.putImageData(imgData, 0, 0);
+		}
+
+		function getMagnitude(gradient, xres, yres, components = 3)
+		{
+			let magnitude = new Int32Array(xres * yres);
+			const stride = components * 2;
+			for(let y = 0; y < yres; y++)
+				for(let x = 0; x < xres; x++)
+				{
+					let sqareSum = 0;
+					for(let c = 0; c < stride; c++)
+						sqareSum += gradient[(y * xres + x) * stride + c] * gradient[(y * xres + x) * stride + c];
+					magnitude[y * xres + x] = Math.round(Math.sqrt(sqareSum));
+				}	
+			return magnitude;			
+		}
+		
+		function sendSpeed(speed)
+		{
+			const buffer = new Uint8Array(1);
+			buffer[0] = speed;
+			ws.send(buffer);
+		}
+
+		function sendLines(strips)
+		{
+			if (!ws || ws.readyState !== WebSocket.OPEN)
+				return;
+			if (!strips || strips.length === 0) 
+				return;
+			let lineSegments = [];
+			strips.forEach(strip => {
+				if(!strip) return;
+                for(let i = 0; i < strip.length; i++)                
+                	lineSegments.push(strip[i]);
+				lineSegments.push([255, 255]);
+			});
+			const buffer = new Uint8Array(lineSegments.length * 2);
+			lineSegments.forEach((point, index) => {
+				buffer[index * 2] = point[0];
+				buffer[index * 2 + 1] = point[1];
+			});
+			ack = false;
+			ws.send(buffer);
+			console.log('Line segments sent');
+		}
+
+		function convertCanvasGreyscale(ctx0, ctx1, xres, yres, gamma)
+		{
+			var imgData = ctx0.getImageData(0, 0, xres, yres);
+			var pixels = imgData.data;
+			for(var y = 0; y < yres; y++)
+			{
+				for(var x = 0; x < xres; x++)
+				{
+					var a = (x + (y * xres)) * 4;
+					var c = Math.round(Math.pow((
+						pixels[a + 2] * 0.2989 + 
+						pixels[a + 1] * 0.5870 + 
+						pixels[a] * 0.1140) / 255, gamma) * 255);
+					pixels[a + 0] = c;
+					pixels[a + 1] = c;
+					pixels[a + 2] = c;
+				}
+			}
+			ctx1.putImageData(imgData, 0, 0);
+			return pixels;
+		}
+
+		function convertFile(event)
+		{
+			var reader = new FileReader();
+			var file = event.target.files[0];
+			reader.onload = function()
+			{
+				var img = document.createElement("img");
+				img.onload = function()
+				{
+					canvas0 = document.querySelector('canvas');
+					ctx0 = canvas0.getContext('2d');
+					ctx0.drawImage(img, 0, 0, canvas0.width, canvas0.height);
+					convertCanvas(ctx0, canvas0.width, canvas0.height);
+				}
+				img.src = reader.result;
+			}
+			if(file)
+				reader.readAsDataURL(file);
+		}
+		
+		function connect()
+		{
+			var server = document.getElementById("server").value;
+			ws = new WebSocket(server);
+			//socket.send("bitluni");
+			ws.onopen = function () {
+				ack = true;
+			};
+			ws.onmessage = function (e) 
+			{
+				const data = e.data.toString(); 
+				if(data == "ACK")
+					ack = true;
+				console.log();
+			};
+		}
+		
+		function send(val)
+		{
+			if (ws && ws.readyState == 1 && ws.bufferedAmount == 0)
+				  ws.send(val);
+		}
+		
+		var displayMediaOptions = 
+		{
+		  video: {
+			cursor: "always"
+		  },
+		  audio: false
+		};
+
+		function changeThreshold(t)
+		{
+			threshold = t;
+		}
+		
+		function changeFps(f)
+		{
+			fps = f * 0.1;
+			document.querySelector("#fpsval").value = fps.toFixed(1);
+			minMillisPerFrame = Math.round(1000 / fps);
+			/*
+			var buff = new Uint8Array(1);
+			buff[0] = f;
+			send(buff);*/
+		}
+		
+		let lastFrameTime = 0;
+		let minMillisPerFrame = 25;
+		function videoCB()
+		{
+			const xres = canvas0.width;
+			const yres = canvas0.height;
+			let t = Date.now();
+			let vx = video.videoWidth;
+			let vy = video.videoHeight;
+			let min = Math.min(vx, vy);
+			let s = canvas0.width / min;
+			ctx0.drawImage(video, -Math.round((vx - min) * 0.5 * s), -Math.round((vy - min) * 0.5), vx * s, vy * s);
+			let pixels = convertCanvasGreyscale(ctx0, ctx1, canvas0.width, canvas0.height, 1);
+			let gradient = getGradient(pixels, canvas0.width, canvas0.height);
+			showGradient(gradient, canvas2.width, canvas2.height);
+			let magnitude = getMagnitude(gradient, xres, yres);
+			let segments = getSegments(magnitude, xres, yres, 4, threshold);
+			//showSegments(segments, xres, yres);
+			let strips = concatenateLineSegments(segments);
+			strips = filterStrips(strips, minPoints);
+			strips = sortStripsByProximity(strips);
+			//strips = [[[0,0],[254, 0],[254, 254], [0, 254], [0,0]], [[50, 50],[204, 50],[204, 204], [50, 204], [50, 50]]]
+			showStrips(strips, xres, yres);
+			if(ws && ws.bufferedAmount === 0 && (t - lastFrameTime) >= minMillisPerFrame && ack)
+			{
+				lastFrameTime = t;
+				sendLines(strips);
+			}
+			video.requestVideoFrameCallback(videoCB);
+		}
+		
+		async function startCapture() 
+		{
+			try 
+			{
+				canvas0 = document.querySelector('#c0');
+				ctx0 = canvas0.getContext('2d', { willReadFrequently: true });			
+				canvas1 = document.querySelector('#c1');
+				ctx1 = canvas1.getContext('2d', { willReadFrequently: true });			
+				canvas2 = document.querySelector('#c2');
+				ctx2 = canvas2.getContext('2d', { willReadFrequently: true });			
+				canvas3 = document.querySelector('#c3');
+				ctx3 = canvas3.getContext('2d', { willReadFrequently: true });			
+				video = document.querySelector('video');
+				video.srcObject = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+				video.requestVideoFrameCallback(videoCB);
+			} catch(err) {
+				console.error("Error: " + err);
+			}
+		}
+
+	</script>
+</head>
+
+<body >
+	<style>
+		body { display: flex; flex-direction: column; align-items: center; background: #C0C0C0; margin: 0; padding-top: 20px; font-family: Arial, sans-serif; }
+		#controls { display: flex; gap: 10px; margin-bottom: 10px; }
+		#status { margin-left: 5px; font-weight: bold; }
+	</style>
+	<h1><a href="https://youtube.com/bitluni">bitluni's</a> Vectorizer</h1>
+	<div id="controls">
+		server: <input id="server" type="text" value="ws://192.168.178.50"><button onclick="connect();">connect</button><br>
+		<button onclick="startCapture();">screen share</button>
+	</div>
+	<div>
+		delay<input type="range" min="10" max="250" value="100" id="fps" oninput="changeFps(this.value)">
+		<input id="fpsval" readonly value="10.0" style="width: 40px"><br>
+		thres<input type="range" min="1" max="400" value="128" id="thres" oninput="changeThreshold(this.value)">
+	</div>
+	<video autoplay hidden></video>
+	<div>
+		<canvas id="c0" width="256px" height="256px" style="zoom: 1"></canvas>
+		<canvas id="c1" width="256px" height="256px" style="zoom: 1"></canvas>
+		<canvas id="c2" width="256px" height="256px" style="zoom: 1"></canvas>
+		<canvas id="c3" width="256px" height="256px" style="zoom: 1"></canvas><br>
+	</div>
+	<div id="out"></div>
+</body>
+</html>
