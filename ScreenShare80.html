@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Screen Capture</title>
+  <style>
+    canvas {
+      border: 1px solid #000;
+    }
+  </style>
+</head>
+<body onload="loadHost()">
+	<input id="host" type="host" placeholder="wled-host"><button onclick="captureAndSend()">start</button>
+	<canvas id="screenCanvas" width="80" height="80"></canvas>
+<script>
+  // Function to capture the screen and send it over WebSocket
+
+  let captureStreamTrack = 0;
+  let socket = 0;
+  let canvas = 0;
+  let ctx = 0;
+
+	function loadHost()
+	{
+		document.querySelector("#host").value = localStorage.getItem("host") || "";
+	}
+
+  async function captureAndSend() {
+    canvas = document.getElementById('screenCanvas');
+    ctx = canvas.getContext('2d');
+
+	// Establish a WebSocket connection to the WLED server
+	const host = document.querySelector("#host").value;
+	window.localStorage.setItem("host", host);
+	socket = new WebSocket("ws://" + host + "/ws");
+//	socket.addEventListener('open', () => {
+//	});
+
+    // Capture the screen contents (adjust the source rectangle as needed)
+    const captureStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+    captureStreamTrack = captureStream.getVideoTracks()[0];
+	
+ 	//socket.send("{'lv':true}");
+	 sendFrame();
+
+}
+function toHex2(i)
+{
+	const h = i.toString(80);
+	return h.length == 1 ? "0" + h: h;
+}
+async function sendFrame()
+{
+	try
+	{
+    const imageCapture = new ImageCapture(captureStreamTrack);
+    const bitmap = await imageCapture.grabFrame();
+    
+    // Draw the captured image onto the canvas
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+	const json = {seg: {i:[]}};
+	const pix = ctx.getImageData(0, 0, 80, 80).data;
+	for(let y = 0; y < 80; y++)
+	{
+		json.seg.i = [];
+		for(let x = 0; x < 80; x++)
+		{
+			const r = pix[(y * 80 + x) * 4 + 0];
+			const g = pix[(y * 80 + x) * 4 + 1];
+			const b = pix[(y * 80 + x) * 4 + 2];
+			json.seg.i.push(x + y * 80);
+			json.seg.i.push(toHex2(r)+toHex2(g)+toHex2(b));
+		}
+		if(socket.readyState == socket.OPEN)
+    		socket.send(JSON.stringify(json));
+		else
+			if(socket.readyState == socket.CLOSED)
+			{
+				const host = document.querySelector("#host").value;
+				socket = new WebSocket("ws://" + host + "/ws");
+			}
+	}
+	//do next frame, dude
+	window.setTimeout(sendFrame, 50);
+	//window.requestAnimationFrame(sendFrame);
+}catch(e)
+{
+	console.error(e);
+}
+  }
+</script>
+
+</body>
+</html>
