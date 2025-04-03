@@ -70,7 +70,7 @@ async function sendFrame()
 			const r = pix[(y * 16 + x) * 4 + 0];
 			const g = pix[(y * 16 + x) * 4 + 1];
 			const b = pix[(y * 16 + x) * 4 + 2];
-			json.seg.i.push(x + y * 32);
+			json.seg.i.push(x + y * 16);
 			json.seg.i.push(toHex2(r)+toHex2(g)+toHex2(b));
 		}
 		if(socket.readyState == socket.OPEN)
