@@ -38,7 +38,7 @@
 
   function toHex2(i) {
     const h = i.toString(16);
-    return h.length === 1 ? "0" + h : h;
+    return h.length == 1 ? "0" + h : h;
   }
 
   async function sendFrame() {
@@ -64,9 +64,9 @@
         }
       }
 
-      if (socket.readyState === socket.OPEN) {
+      if (socket.readyState == socket.OPEN) {
         socket.send(JSON.stringify(json));
-      } else if (socket.readyState === socket.CLOSED) {
+      } else if (socket.readyState == socket.CLOSED) {
         const host = document.querySelector("#host").value;
         socket = new WebSocket("ws://" + host + "/ws");
       }
